@@ -4,15 +4,17 @@
 
 import UIKit
 
+protocol ItemsService {
+   func loadItems(completion: @escaping (Result<[ItemViewModel], Error>) -> Void)
+}
+
 class ListViewController: UITableViewController {
    var items = [ItemViewModel]()
-   
+   var service: ItemsService?
    var retryCount = 0
    var maxRetryCount = 0
    var shouldRetry = false
-   
    var longDateStyle = false
-   
    var fromReceivedTransfersScreen = false
    var fromSentTransfersScreen = false
    var fromCardsScreen = false
@@ -24,20 +26,13 @@ class ListViewController: UITableViewController {
       refreshControl = UIRefreshControl()
       refreshControl?.addTarget(self, action: #selector(refresh), for: .valueChanged)
       
-      if fromFriendsScreen {
-         shouldRetry = true
-         maxRetryCount = 2
-         
-         title = "Friends"
-         
-         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addFriend))
-         
-      } else if fromCardsScreen {
+      if fromCardsScreen {
          shouldRetry = false
          
          title = "Cards"
          
-         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addCard))
+         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem:
+               .add, target: self, action: #selector(addCard))
          
       } else if fromSentTransfersScreen {
          shouldRetry = true
@@ -45,7 +40,8 @@ class ListViewController: UITableViewController {
          longDateStyle = true
          
          navigationItem.title = "Sent"
-         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Send", style: .done, target: self, action: #selector(sendMoney))
+         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Send", style:
+               .done, target: self, action: #selector(sendMoney))
          
       } else if fromReceivedTransfersScreen {
          shouldRetry = true
@@ -53,7 +49,8 @@ class ListViewController: UITableViewController {
          longDateStyle = false
          
          navigationItem.title = "Received"
-         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Request", style: .done, target: self, action: #selector(requestMoney))
+         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Request", style:
+               .done, target: self, action: #selector(requestMoney))
       }
    }
    
@@ -68,21 +65,8 @@ class ListViewController: UITableViewController {
    @objc private func refresh() {
       refreshControl?.beginRefreshing()
       if fromFriendsScreen {
-         FriendsAPI.shared.loadFriends { [weak self] result in
-            DispatchQueue.mainAsyncIfNeeded {
-               self?.handleAPIResult(result.map { items in
-                  if User.shared?.isPremium == true {
-                     (UIApplication.shared.connectedScenes.first?.delegate as! SceneDelegate).cache.save(items)
-                  }
-                  
-                  return items.map { item in
-                     ItemViewModel(friend: item, selection: {
-                        self?.select(friend: item)
-                     })
-                  }
-               })
-            }
-         }
+         service?.loadItems(completion: handleAPIResult)
+         
       } else if fromCardsScreen {
          CardAPI.shared.loadCards { [weak self] result in
             DispatchQueue.mainAsyncIfNeeded {
@@ -180,72 +164,9 @@ class ListViewController: UITableViewController {
       let item = items[indexPath.row]
       item.select()
    }
-   
 }
 
-struct ItemViewModel {
-   let title: String
-   let subtitle: String
-   let select: () -> Void
-   
-   init(_ item: Any, longDateStyle: Bool, selection: @escaping () -> Void) {
-      if let friend = item as? Friend {
-         self.init(friend: friend, selection: selection)
-      } else if let card = item as? Card {
-         self.init(card: card, selection: selection)
-      } else if let transfer = item as? Transfer {
-         self.init(transfer: transfer, longDateStyle: longDateStyle, selection: selection)
-      } else {
-         fatalError("unknown item: \(item)")
-      }
-   }
-}
-
-extension ItemViewModel {
-   init(friend: Friend, selection: @escaping () -> Void) {
-      title = friend.name
-      subtitle = friend.phone
-      select = selection
-   }
-}
-
-extension ItemViewModel {
-   init(card: Card, selection: @escaping () -> Void) {
-      title = card.number
-      subtitle = card.holder
-      select = selection
-   }
-}
-
-extension ItemViewModel {
-   init(transfer: Transfer, longDateStyle: Bool, selection: @escaping () -> Void) {
-      let numberFormatter = Formatters.number
-      numberFormatter.numberStyle = .currency
-      numberFormatter.currencyCode = transfer.currencyCode
-      
-      let amount = numberFormatter.string(from: transfer.amount as NSNumber)!
-      title = "\(amount) • \(transfer.description)"
-      
-      let dateFormatter = Formatters.date
-      if longDateStyle {
-         dateFormatter.dateStyle = .long
-         dateFormatter.timeStyle = .short
-         subtitle = "Sent to: \(transfer.recipient) on \(dateFormatter.string(from: transfer.date))"
-      } else {
-         dateFormatter.dateStyle = .short
-         dateFormatter.timeStyle = .short
-         subtitle = "Received from: \(transfer.sender) on \(dateFormatter.string(from: transfer.date))"
-      }
-      select = selection
-   }
-}
-
-extension UITableViewCell {
-   func configure(_ vm: ItemViewModel) {
-      textLabel?.text = vm.title
-      detailTextLabel?.text = vm.subtitle
-   }
-}
+// MARK: - EXTENSIONS
 
 extension UIViewController {
    func select(friend: Friend) {
