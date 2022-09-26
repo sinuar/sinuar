@@ -19,8 +19,7 @@ class MainTabBarController: UITabBarController {
          makeNav(for: makeFriendsList(), title: "Friends", icon: "person.2.fill"),
          makeTransfersList(),
          makeNav(for: makeCardsList(), title: "Cards", icon: "creditcard.fill")
-      ]
-   }
+      ] }
    
    private func makeNav(for vc: UIViewController, title: String, icon: String) -> UIViewController {
       vc.navigationItem.largeTitleDisplayMode = .always
@@ -56,48 +55,50 @@ class MainTabBarController: UITabBarController {
    
    private func makeFriendsList() -> ListViewController {
       let vc = ListViewController()
-      vc.fromFriendsScreen = true
-      vc.shouldRetry = true
-      vc.maxRetryCount = 2
       vc.title = "Friends"
       vc.navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem:
             .add, target: vc, action: #selector(addFriend))
       
       let isPremium = User.shared?.isPremium == true
       
-      vc.service = FriendsAPIItemsServiceAdapter(
-         select: {[weak vc] item in
+      let api = FriendsAPIItemsServiceAdapter(
+         select: { [weak vc] item in
             vc?.select(friend: item)
          },
          api: FriendsAPI.shared,
-         cache: isPremium ? friendsCache: NullFriendsCache())
+         cache: isPremium ? friendsCache: NullFriendsCache()
+      ).retry(2)
+      
+      let cache = FriendsCacheItemsServiceAdapter(
+         select: { [weak vc] item in
+            vc?.select(friend: item)
+         },
+         cache: friendsCache)
+      
+      vc.service = isPremium ? api.fallback(cache): api
+      
       return vc
    }
    
    private func makeSentTransfersList() -> ListViewController {
       let vc = ListViewController()
-      vc.fromSentTransfersScreen = true
-      vc.shouldRetry = true
-      vc.maxRetryCount = 1
-      vc.longDateStyle = true
       
       vc.navigationItem.title = "Sent"
       vc.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Send", style:
             .done, target: vc, action: #selector(sendMoney))
+      
       vc.service = SentTransfersAPIItemsServiceAdapter(
          select: { [weak vc] item in
             vc?.select(transfer: item)
          },
-         api: TransfersAPI.shared)
+         api: TransfersAPI.shared
+      ).retry(1)
+      
       return vc
    }
    
    private func makeReceivedTransfersList() -> ListViewController {
       let vc = ListViewController()
-      vc.fromReceivedTransfersScreen = true
-      vc.shouldRetry = true
-      vc.maxRetryCount = 1
-      vc.longDateStyle = false
       
       vc.navigationItem.title = "Received"
       vc.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Request", style:
@@ -106,14 +107,14 @@ class MainTabBarController: UITabBarController {
          select: { [weak vc] item in
             vc?.select(transfer: item)
          },
-         api: TransfersAPI.shared)
+         api: TransfersAPI.shared
+      ).retry(1)
+      
       return vc
    }
    
    private func makeCardsList() -> ListViewController {
       let vc = ListViewController()
-      vc.fromCardsScreen = true
-      vc.shouldRetry = false
       vc.title = "Cards"
       vc.navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem:
             .add, target: vc, action: #selector(addCard))
@@ -123,6 +124,37 @@ class MainTabBarController: UITabBarController {
          },
          api: CardAPI.shared)
       return vc
+   }
+}
+
+extension ItemsService {
+   func fallback(_ fallback: ItemsService) -> ItemsService {
+      ItemsServiceWithFallback(primary: self, fallback: fallback)
+   }
+   
+   func retry(_ retryCount: UInt) -> ItemsService {
+      var service: ItemsService = self
+      for _ in 0..<retryCount {
+         service = service.fallback(self)
+      }
+      return service
+   }
+}
+
+struct ItemsServiceWithFallback: ItemsService {
+   let primary: ItemsService
+   let fallback: ItemsService
+   
+   func loadItems(completion: @escaping (Result<[ItemViewModel], Error>) -> Void) {
+      primary.loadItems { result in
+         switch result {
+            case .success:
+               completion(result)
+            case .failure:
+               fallback.loadItems(completion: completion)
+               
+         }
+      }
    }
 }
 
@@ -138,6 +170,25 @@ struct FriendsAPIItemsServiceAdapter: ItemsService {
                cache.save(items)
                
                return items.map { item in
+                  ItemViewModel(friend: item, selection: {
+                     select(item)
+                  })
+               }
+            })
+         }
+      }
+   }
+}
+
+struct FriendsCacheItemsServiceAdapter: ItemsService {
+   let select: (Friend) -> Void
+   let cache: FriendsCache
+   
+   func loadItems(completion: @escaping (Result<[ItemViewModel], Error>) -> Void) {
+      cache.loadFriends { result in
+         DispatchQueue.mainAsyncIfNeeded {
+            completion(result.map { items in
+               items.map { item in
                   ItemViewModel(friend: item, selection: {
                      select(item)
                   })
